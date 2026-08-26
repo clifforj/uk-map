@@ -1,0 +1,40 @@
+name: Deploy style to R2
+
+# Serves client/style.json (issue 5.1) from R2 alongside the fonts/sprites/
+# tiles it references, for any client other than the demo page (issue 5.2) to
+# consume directly. __TILE_HOSTNAME__ is substituted from the TILE_HOSTNAME
+# secret (see docs/decisions/003-cloudflare-domain.md); __VERSION__ is left
+# in place — consumers resolve it from latest.json themselves, the same way
+# client/main.js does, so this file doesn't need re-uploading on every build.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/style.json'
+      - '.github/workflows/deploy-style.yml'
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Substitute TILE_HOSTNAME
+        run: |
+          sed "s/__TILE_HOSTNAME__/${{ secrets.TILE_HOSTNAME }}/g" client/style.json > style.json
+
+      - name: Upload to R2
+        run: |
+          curl -sSL https://rclone.org/install.sh | sudo bash
+          rclone copyto style.json "r2:${{ secrets.R2_BUCKET }}/style.json" \
+            --header-upload "Cache-Control: public, max-age=300" \
+            --header-upload "Content-Type: application/json" \
+            --s3-no-check-bucket

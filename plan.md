@@ -347,7 +347,7 @@ Uses whichever strategy issue 1.1 proved viable. The RAM strategy is preferred b
 **This workflow builds and uploads. It does not make anything live** — promotion is issue 3.5.
 
 ### Tasks
-- [ ] Create `.github/workflows/build-tiles.yml`
+- [ ] Create `.github/workflows/stage-tiles.yml`
 - [ ] Set the cron from the cadence decided in issue 0.2
 
 ```yaml

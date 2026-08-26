@@ -1,7 +1,7 @@
 name: Promote a build
 
 # Makes a staged, validated build live by writing latest.json. Deliberately
-# separate from build-tiles.yml (issue 3.2) — see the note there and in
+# separate from stage-tiles.yml (issue 3.2) — see the note there and in
 # plan.md 3.5. A version only goes live when this workflow runs, either by
 # hand or via the Saturday auto-promote below; a bad or unvalidated build
 # never goes live unattended.
@@ -17,7 +17,7 @@ on:
         required: false
         type: string
   schedule:
-    # Saturday 02:00 UTC — a lag after the Wednesday build (build-tiles.yml),
+    # Saturday 02:00 UTC — a lag after the Wednesday build (stage-tiles.yml),
     # giving a bake period before anything goes live unattended. Per
     # plan.md 3.5, mirrors OpenFreeMap's build-Wednesday/promote-Saturday gap.
     - cron: '0 2 * * 6'

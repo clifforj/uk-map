@@ -37,7 +37,7 @@ Rationale:
 
 ## Consequences
 
-- `build-tiles.yml` gets a `notify-on-failure` job (`if: failure()`) covering
+- `stage-tiles.yml` gets a `notify-on-failure` job (`if: failure()`) covering
   both the build and validate jobs.
 - `promote.yml` gets a `notify` job: files an issue on every successful
   promotion, and a separate one on validate/promote failure.

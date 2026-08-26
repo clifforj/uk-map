@@ -1,11 +1,11 @@
 name: Validate staged build
 
-# Validates a STAGED archive already uploaded to R2 by build-tiles.yml — never
+# Validates a STAGED archive already uploaded to R2 by stage-tiles.yml — never
 # the live endpoint (that's issue 6.1's post-promotion smoke test) and never
 # anything reachable through the Worker/CDN. Nothing here writes latest.json;
 # promotion is a separate, deliberate act (issue 3.5).
 #
-# Runs automatically as a job in build-tiles.yml (via workflow_call), and can
+# Runs automatically as a job in stage-tiles.yml (via workflow_call), and can
 # also be triggered by hand against any already-staged version — including
 # with inject_corruption to prove the gate actually fails on a bad archive.
 

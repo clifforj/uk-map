@@ -1,8 +1,8 @@
-name: Build UK tiles
+name: Stage UK tiles
 
-# Builds and uploads a versioned PMTiles archive to R2, writing a .done
-# marker last so nothing downstream acts on a partial upload. Does NOT
-# make anything live — promotion (writing latest.json) is a separate
+# Builds, uploads, and validates a versioned PMTiles archive in R2 — writing
+# a .done marker last so nothing downstream acts on a partial upload. Does
+# NOT make anything live — promotion (writing latest.json) is a separate
 # workflow (issue 3.5), so a bad build never goes live unattended.
 
 on:

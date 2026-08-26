@@ -1,0 +1,219 @@
+name: Validate staged build
+
+# Validates a STAGED archive already uploaded to R2 by build-tiles.yml — never
+# the live endpoint (that's issue 6.1's post-promotion smoke test) and never
+# anything reachable through the Worker/CDN. Nothing here writes latest.json;
+# promotion is a separate, deliberate act (issue 3.5).
+#
+# Runs automatically as a job in build-tiles.yml (via workflow_call), and can
+# also be triggered by hand against any already-staged version — including
+# with inject_corruption to prove the gate actually fails on a bad archive.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to validate, e.g. 20260826. Empty = most recently staged version.'
+        required: false
+        type: string
+      inject_corruption:
+        description: 'Testing only: truncate the downloaded archive before validating, to prove the gate fails on a bad build.'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to validate, e.g. 20260826. Empty = most recently staged version.'
+        required: false
+        type: string
+      inject_corruption:
+        description: 'Testing only: truncate the downloaded archive before validating, to prove the gate fails on a bad build.'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version to validate
+        id: resolve
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$R2_ENDPOINT" \
+              | awk '{print $4}' | grep -E '^uk-[0-9]{8}\.done$' \
+              | sed -E 's/uk-([0-9]{8})\.done/\1/' | sort -r | head -1)
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::No staged version found to validate (no uk-*.done objects in the bucket)"
+            exit 1
+          fi
+          echo "Validating version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Assert .done marker exists
+        id: done
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          if ! aws s3api head-object --bucket "$R2_BUCKET" --key "uk-${VERSION}.done" --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
+            echo "::error::uk-${VERSION}.done marker not found — this version never finished uploading and must not be considered for promotion"
+            exit 1
+          fi
+          aws s3 cp "s3://${R2_BUCKET}/uk-${VERSION}.done" done.json --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          cat done.json
+          echo "planetiler_tag=$(jq -r .planetiler_version done.json)" >> "$GITHUB_OUTPUT"
+          echo "output_bytes=$(jq -r .output_bytes done.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Compare output size against the previous staged version
+        id: sizeband
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          CURRENT_BYTES=${{ steps.done.outputs.output_bytes }}
+          PREV_VERSION=$(aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$R2_ENDPOINT" \
+            | awk '{print $4}' | grep -E '^uk-[0-9]{8}\.done$' \
+            | sed -E 's/uk-([0-9]{8})\.done/\1/' | sort -r \
+            | awk -v v="$VERSION" '$1 < v' | head -1)
+          if [ -z "$PREV_VERSION" ]; then
+            echo "No earlier staged version to compare against — first staged build, skipping the size-band check"
+            echo "### Size band" >> "$GITHUB_STEP_SUMMARY"
+            echo "n/a (first staged build, ${CURRENT_BYTES} bytes)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          aws s3 cp "s3://${R2_BUCKET}/uk-${PREV_VERSION}.done" prev-done.json --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          PREV_BYTES=$(jq -r .output_bytes prev-done.json)
+          DIFF_PCT=$(awk -v c="$CURRENT_BYTES" -v p="$PREV_BYTES" 'BEGIN { printf "%.1f", (c - p) / p * 100 }')
+          ABS_DIFF=$(awk -v d="$DIFF_PCT" 'BEGIN { print (d < 0) ? -d : d }')
+          echo "Previous version $PREV_VERSION: $PREV_BYTES bytes. Current $VERSION: $CURRENT_BYTES bytes (${DIFF_PCT}%)"
+          {
+            echo "### Size band"
+            echo "Current \`${VERSION}\`: ${CURRENT_BYTES} bytes vs previous \`${PREV_VERSION}\`: ${PREV_BYTES} bytes (${DIFF_PCT}%)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if awk -v a="$ABS_DIFF" 'BEGIN { exit !(a > 20) }'; then
+            echo "::error::Output size swung ${DIFF_PCT}% vs previous version ${PREV_VERSION} (${PREV_BYTES} -> ${CURRENT_BYTES} bytes) — over the 20% band, usually a truncated source download or a schema change"
+            exit 1
+          fi
+
+      - name: Install pmtiles CLI
+        run: |
+          URL=$(curl -sSL https://api.github.com/repos/protomaps/go-pmtiles/releases/latest \
+            | jq -r '.assets[] | select(.name | test("Linux_x86_64")) | .browser_download_url')
+          curl -sSL -o pmtiles.tar.gz "$URL"
+          tar -xzf pmtiles.tar.gz pmtiles
+          chmod +x pmtiles
+          sudo mv pmtiles /usr/local/bin/pmtiles
+
+      - name: Download the staged archive
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          aws s3 cp "s3://${R2_BUCKET}/uk-${VERSION}.pmtiles" uk.pmtiles --endpoint-url "$R2_ENDPOINT" --only-show-errors
+
+      # Lets us prove the gate rejects a bad build on demand, without waiting
+      # for (or manufacturing) a real broken Planetiler run.
+      - name: Inject corruption (testing only)
+        if: ${{ inputs.inject_corruption }}
+        run: |
+          echo "::warning::inject_corruption is set — truncating the staged archive to prove the gate fails"
+          head -c 1000000 uk.pmtiles > uk-corrupt.pmtiles
+          mv uk-corrupt.pmtiles uk.pmtiles
+
+      - name: Verify archive metadata — bounds, zoom range, layers
+        run: |
+          TAG=${{ steps.done.outputs.planetiler_tag }}
+          curl -sSL -o shortbread.yml \
+            "https://raw.githubusercontent.com/onthegomap/planetiler/${TAG}/planetiler-custommap/src/main/resources/samples/shortbread.yml"
+          awk '/^layers:/{f=1} f && /^- id:/{print $3}' shortbread.yml | sort > expected-layers.txt
+          echo "Expected layers from shortbread.yml @ ${TAG}:"
+          cat expected-layers.txt
+
+          if ! pmtiles show uk.pmtiles > show.txt; then
+            echo "::error::pmtiles show failed — staged file is not a valid PMTiles archive"
+            exit 1
+          fi
+          cat show.txt
+
+          MIN_ZOOM=$(grep '^min zoom:' show.txt | awk '{print $3}')
+          MAX_ZOOM=$(grep '^max zoom:' show.txt | awk '{print $3}')
+          if [ "$MIN_ZOOM" != "0" ] || [ "$MAX_ZOOM" != "14" ]; then
+            echo "::error::Unexpected zoom range min=${MIN_ZOOM} max=${MAX_ZOOM} (expected 0-14, per docs/validation/1.2's baseline)"
+            exit 1
+          fi
+
+          # UK/Ireland extent, per the bounds recorded in issue 1.2's local
+          # validation, with slack for minor source-extract drift.
+          python3 .github/scripts/verify_bounds.py
+
+          if ! pmtiles show --metadata uk.pmtiles > metadata.json; then
+            echo "::error::pmtiles show --metadata failed"
+            exit 1
+          fi
+          python3 .github/scripts/verify_layers.py
+
+          {
+            echo "### Metadata"
+            echo "Bounds, zoom range and $(wc -l < expected-layers.txt | tr -d ' ') expected layers all verified against \`shortbread.yml@${TAG}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fetch known tiles and assert valid non-empty MVT
+        run: |
+          # Same four locations spot-checked by hand in issue 1.2, across a
+          # spread of zooms. Tile x/y computed with the standard slippy-map
+          # Web Mercator formula.
+          python3 .github/scripts/tile_coords.py > tiles.txt
+
+          FAIL=0
+          while IFS=$'\t' read -r NAME Z X Y; do
+            if ! pmtiles tile uk.pmtiles "$Z" "$X" "$Y" > tile.mvt.gz 2>tile-err.txt; then
+              echo "::error::No tile found for ${NAME} at z=${Z} x=${X} y=${Y}: $(cat tile-err.txt)"
+              FAIL=1
+              continue
+            fi
+            BYTES=$(stat -c%s tile.mvt.gz)
+            if [ "$BYTES" -eq 0 ]; then
+              echo "::error::Empty tile for ${NAME} at z=${Z} x=${X} y=${Y}"
+              FAIL=1
+              continue
+            fi
+            if ! gunzip -t tile.mvt.gz 2>/dev/null; then
+              echo "::error::Tile for ${NAME} at z=${Z} x=${X} y=${Y} is not valid gzip (tile compression is gzip per issue 1.2)"
+              FAIL=1
+              continue
+            fi
+            echo "OK: ${NAME} z=${Z} x=${X} y=${Y} (${BYTES} bytes compressed)"
+          done < tiles.txt
+
+          if [ "$FAIL" -eq 1 ]; then
+            exit 1
+          fi
+
+          echo "### Tile fetch" >> "$GITHUB_STEP_SUMMARY"
+          echo "All $(wc -l < tiles.txt | tr -d ' ') known tiles (4 locations x 4 zooms) returned valid, non-empty, gzip-compressed MVT." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report result
+        if: always()
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "## :white_check_mark: Version ${VERSION} passed the staged-build validation gate" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## :x: Version ${VERSION} FAILED the staged-build validation gate — do not promote" >> "$GITHUB_STEP_SUMMARY"
+          fi

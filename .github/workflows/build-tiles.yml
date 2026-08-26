@@ -14,6 +14,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
 
@@ -116,3 +118,12 @@ jobs:
           rclone copyto done.json "r2:${{ secrets.R2_BUCKET }}/uk-${VERSION}.done" \
             --header-upload "Content-Type: application/json" \
             --s3-no-check-bucket
+
+  # Validates the staged archive uploaded above — never anything live. See
+  # issue 3.4 and validate-tiles.yml. This job does not promote anything.
+  validate:
+    needs: build
+    uses: ./.github/workflows/validate-tiles.yml
+    with:
+      version: ${{ needs.build.outputs.version }}
+    secrets: inherit

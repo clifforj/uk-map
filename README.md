@@ -25,3 +25,13 @@ workflows.
 - **Tile hostname:** see the `TILE_HOSTNAME` repo secret.
 - **Tiered Cache:** enabled (Caching → Tiered Cache in the Cloudflare
   dashboard) — free on all plans, reduces origin pulls on R2.
+
+## R2 storage
+
+- **Bucket:** `uk-tiles`, Standard storage class, Western Europe location
+  hint.
+- **S3-compatible endpoint:** `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com/uk-tiles`
+  — the account ID isn't committed to this (public) repo; it's stored as the
+  `R2_ACCOUNT_ID` GitHub Actions secret.
+- Verified reachable via the S3 API (`aws s3 ls`) from a local machine using
+  an R2 API token scoped to this bucket.

@@ -5,6 +5,15 @@ Actions, stored in Cloudflare R2, and served through Cloudflare's CDN to
 MapLibre GL clients. See [`plan.md`](plan.md) for the full implementation
 plan and [`docs/decisions/`](docs/decisions/) for decision records.
 
+## Repository visibility
+
+This repo is **public**, deliberately: GitHub Actions gives public repos
+4 vCPU / 16 GB runners, versus 2 vCPU / 8 GB for private ones. The RAM-only
+build strategy (see `plan.md`) needs the larger runner, so public was a
+requirement, not just a default. Anything that shouldn't be public (the tile
+hostname, R2 account ID) is kept out of the repo and stored as GitHub Actions
+secrets instead — see below.
+
 ## Working on this repo
 
 This project is small enough right now that branches and PRs are unnecessary

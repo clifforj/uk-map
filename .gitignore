@@ -1,0 +1,4 @@
+*.pmtiles
+*.osm.pbf
+data/
+.DS_Store

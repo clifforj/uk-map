@@ -43,3 +43,10 @@ changes are infrequent enough that a deliberate local deploy is fine.
 npm test        # unit tests for shared/ (pmtiles_path, tile_path)
 npm run typecheck
 ```
+
+## Deploy history
+
+- **2026-08-26** — Version `5a9643e5-7cd3-443f-af59-77a43e98e472`. Matches
+  this directory's `src/index.ts` exactly (the namespaced static-passthrough
+  cache key). Live and verified against `latest.json`, a tile, a font and a
+  sprite, all 200.

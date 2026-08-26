@@ -35,3 +35,14 @@ workflows.
   `R2_ACCOUNT_ID` GitHub Actions secret.
 - Verified reachable via the S3 API (`aws s3 ls`) from a local machine using
   an R2 API token scoped to this bucket.
+- **CI credentials:** a dedicated R2 API token (created via R2 → Manage R2
+  API Tokens, not a general account/user API token) scoped to **Object Read
+  & Write on the `uk-tiles` bucket only**. Stored as GitHub Actions secrets
+  `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
+  Verified via the `R2 smoke test` workflow
+  (`.github/workflows/r2-smoke-test.yml`), which lists the bucket contents.
+- **Rotation:** rotate this token roughly every 12 months, or immediately if
+  it's ever exposed (e.g. pasted somewhere outside a secrets store). To
+  rotate: create a new bucket-scoped token in the Cloudflare dashboard,
+  update the four `R2_*` GitHub secrets, confirm the smoke test workflow
+  still passes, then revoke the old token.

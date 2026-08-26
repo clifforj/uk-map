@@ -34,6 +34,11 @@ workflows.
 - **Tile hostname:** see the `TILE_HOSTNAME` repo secret.
 - **Tiered Cache:** enabled (Caching → Tiered Cache in the Cloudflare
   dashboard) — free on all plans, reduces origin pulls on R2.
+- **Abuse protection:** a per-IP WAF rate-limiting rule on the tile
+  hostname, sized against MapLibre's own request concurrency; see
+  [`docs/decisions/005-abuse-protection.md`](docs/decisions/005-abuse-protection.md)
+  for the exact spec, the Referer-allowlist deferral, and the accepted
+  worst-case cost.
 
 ## R2 storage
 

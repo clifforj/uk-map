@@ -19,9 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Includes time-of-day, not just date, so two runs on the same day get
+      # distinct keys instead of one silently overwriting the other's
+      # supposedly-immutable archive (see the "Refuse to overwrite" step
+      # below for the hard backstop).
       - name: Compute version
         id: version
-        run: echo "value=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+        run: echo "value=$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -70,6 +74,23 @@ jobs:
 
       - name: Report output size
         run: ls -lh uk.pmtiles
+
+      # Hard backstop behind the HHMMSS version granularity above: the
+      # archive is served with an immutable, one-year Cache-Control, so
+      # silently overwriting an existing key would leave stale and fresh
+      # bytes both live under the same URL depending on cache state.
+      - name: Refuse to overwrite an existing key
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          VERSION=${{ steps.version.outputs.value }}
+          R2_ENDPOINT=https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          if aws s3api head-object --bucket "${{ secrets.R2_BUCKET }}" --key "uk-${VERSION}.pmtiles" --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
+            echo "::error::uk-${VERSION}.pmtiles already exists in R2 — refusing to overwrite an immutable-cached object"
+            exit 1
+          fi
 
       # Uploads the staged archive under a versioned filename and only marks
       # it complete once every upload has succeeded — see issue 3.3. Nothing

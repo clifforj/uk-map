@@ -31,8 +31,8 @@ jobs:
         id: plan
         run: |
           ALL_VERSIONS=$(aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$R2_ENDPOINT" \
-            | awk '{print $4}' | grep -E '^uk-[0-9]{8}\.done$' \
-            | sed -E 's/uk-([0-9]{8})\.done/\1/' | sort -r)
+            | awk '{print $4}' | grep -E '^uk-[0-9]{8}-[0-9]{6}\.done$' \
+            | sed -E 's/uk-([0-9]{8}-[0-9]{6})\.done/\1/' | sort -r)
 
           LIVE_VERSION=""
           if aws s3api head-object --bucket "$R2_BUCKET" --key latest.json --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
@@ -48,8 +48,8 @@ jobs:
           fi
 
           KEEP=$( (echo "$ALL_VERSIONS" | head -n "$KEEP_COUNT"; echo "$LIVE_VERSION"; echo "$PREV_VERSION") \
-            | grep -E '^[0-9]{8}$' | sort -u)
-          DELETE=$(comm -23 <(echo "$ALL_VERSIONS" | grep -E '^[0-9]{8}$' | sort -u) <(echo "$KEEP"))
+            | grep -E '^[0-9]{8}-[0-9]{6}$' | sort -u)
+          DELETE=$(comm -23 <(echo "$ALL_VERSIONS" | grep -E '^[0-9]{8}-[0-9]{6}$' | sort -u) <(echo "$KEEP"))
 
           echo "All staged versions:"
           echo "$ALL_VERSIONS"

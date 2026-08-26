@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to promote, e.g. 20260826. Empty = most recently staged version.'
+        description: 'Version to promote, e.g. 20260826-140000. Empty = most recently staged version.'
         required: false
         type: string
   schedule:
@@ -53,8 +53,8 @@ jobs:
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
             VERSION=$(aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$R2_ENDPOINT" \
-              | awk '{print $4}' | grep -E '^uk-[0-9]{8}\.done$' \
-              | sed -E 's/uk-([0-9]{8})\.done/\1/' | sort -r | head -1)
+              | awk '{print $4}' | grep -E '^uk-[0-9]{8}-[0-9]{6}\.done$' \
+              | sed -E 's/uk-([0-9]{8}-[0-9]{6})\.done/\1/' | sort -r | head -1)
           fi
           if [ -z "$VERSION" ]; then
             echo "::error::No staged version found to promote"

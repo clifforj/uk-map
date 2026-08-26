@@ -1,0 +1,38 @@
+name = "pmtiles-uk-tiles"
+main = "src/index.ts"
+compatibility_date = "2026-08-26"
+minify = false
+
+# custom_domain = true routes this hostname to the Worker AND enables
+# Cloudflare's edge cache for its responses. Must stay a true top-level
+# key, above every [section]/[[section]] table header — nested under one
+# it silently becomes a field of that table (or, under [vars], a plain
+# environment variable) instead of an actual route attachment.
+#
+# Copy this file to wrangler.toml (gitignored — it's the one place the real
+# tile hostname has to live outside GitHub Actions secrets, since wrangler
+# needs it locally to deploy) and substitute the real hostname, i.e. the
+# TILE_HOSTNAME repo secret's value — see docs/decisions/003-cloudflare-domain.md.
+routes = [
+  { pattern = "__TILE_HOSTNAME__", custom_domain = true }
+]
+
+# R2 bucket bindings; adjust names for dev vs prod buckets.
+[[r2_buckets]]
+# Alias used in the worker (env.BUCKET)
+binding = "BUCKET"
+# Bucket used when running `wrangler dev`
+preview_bucket_name = "uk-tiles"
+# Bucket used on `wrangler deploy`
+bucket_name = "uk-tiles"
+
+[vars]
+# Left blank until the frontend's final domain is known — no prod origin
+# gets Access-Control-Allow-Origin until this is filled in, so cross-origin
+# fetches from a prod page will fail CORS (same-origin requests, e.g. the
+# frontend served from this same domain, are unaffected either way).
+# Any http://localhost:PORT origin is allowed separately, in code
+# (src/index.ts) — no need to list local dev ports here.
+# TODO: fill in before shipping. Do NOT set to "*" — coordinate with issue 4.2.
+ALLOWED_ORIGINS = ""
+# CACHE_CONTROL = "public, max-age=86400"

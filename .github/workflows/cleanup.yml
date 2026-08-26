@@ -1,0 +1,79 @@
+name: Clean up old builds
+
+# Deletes staged builds older than the retention window, keeping R2 storage
+# within the free 10 GB/month tier (each build is 2-4 GB; see plan.md 3.6).
+# Never touches latest.json itself, and never deletes the live version or
+# its immediate predecessor (the rollback target for promote.yml), no
+# matter how old they are.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sunday 02:00 UTC — after both the Wednesday build and the Saturday
+    # auto-promote, so retention always sees the current live version.
+    - cron: '0 2 * * 0'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      # Retention window: last 4 builds at weekly cadence gives a month of
+      # rollback targets — see plan.md 3.6.
+      KEEP_COUNT: 4
+    steps:
+      - name: Compute versions to delete
+        id: plan
+        run: |
+          ALL_VERSIONS=$(aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$R2_ENDPOINT" \
+            | awk '{print $4}' | grep -E '^uk-[0-9]{8}\.done$' \
+            | sed -E 's/uk-([0-9]{8})\.done/\1/' | sort -r)
+
+          LIVE_VERSION=""
+          if aws s3api head-object --bucket "$R2_BUCKET" --key latest.json --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
+            aws s3 cp "s3://${R2_BUCKET}/latest.json" latest.json --endpoint-url "$R2_ENDPOINT" --only-show-errors
+            LIVE_VERSION=$(jq -r .version latest.json)
+          fi
+
+          # Rollback target: the staged version immediately before the live
+          # one, so a rollback right after cleanup always has somewhere to go.
+          PREV_VERSION=""
+          if [ -n "$LIVE_VERSION" ]; then
+            PREV_VERSION=$(echo "$ALL_VERSIONS" | awk -v v="$LIVE_VERSION" '$1 < v' | head -1)
+          fi
+
+          KEEP=$( (echo "$ALL_VERSIONS" | head -n "$KEEP_COUNT"; echo "$LIVE_VERSION"; echo "$PREV_VERSION") \
+            | grep -E '^[0-9]{8}$' | sort -u)
+          DELETE=$(comm -23 <(echo "$ALL_VERSIONS" | grep -E '^[0-9]{8}$' | sort -u) <(echo "$KEEP"))
+
+          echo "All staged versions:"
+          echo "$ALL_VERSIONS"
+          echo "Live version: ${LIVE_VERSION:-none}"
+          echo "Rollback-target version: ${PREV_VERSION:-none}"
+          echo "Keeping:"
+          echo "$KEEP"
+          echo "Deleting:"
+          echo "${DELETE:-none}"
+
+          {
+            echo "### Retention"
+            echo "Live: \`${LIVE_VERSION:-none}\`. Rollback target: \`${PREV_VERSION:-none}\`."
+            echo "Kept: $(echo "$KEEP" | tr '\n' ' ')"
+            echo "Deleted: $(echo "${DELETE:-none}" | tr '\n' ' ')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "$DELETE" > delete-versions.txt
+
+      - name: Delete out-of-window versions
+        run: |
+          while read -r VERSION; do
+            [ -z "$VERSION" ] && continue
+            echo "Deleting uk-${VERSION}.pmtiles and uk-${VERSION}.done"
+            aws s3 rm "s3://${R2_BUCKET}/uk-${VERSION}.pmtiles" --endpoint-url "$R2_ENDPOINT"
+            aws s3 rm "s3://${R2_BUCKET}/uk-${VERSION}.done" --endpoint-url "$R2_ENDPOINT"
+          done < delete-versions.txt

@@ -1,0 +1,63 @@
+name: Build UK tiles
+
+# Builds and uploads a versioned PMTiles archive. Does NOT make anything
+# live — promotion (writing latest.json) is a separate workflow (issue 3.5),
+# so a bad build never goes live unattended.
+
+on:
+  schedule:
+    - cron: '0 2 * * 3'   # Weekly, Wednesday 02:00 UTC — see docs/decisions/002-rebuild-cadence.md
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Resolve latest Planetiler release tag
+        id: planetiler
+        run: |
+          TAG=$(curl -sSL -o /dev/null -w '%{url_effective}' \
+            https://github.com/onthegomap/planetiler/releases/latest | sed 's#.*/tag/##')
+          echo "Resolved Planetiler release: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Shortbread is the schema decided in docs/decisions/001-tile-schema.md.
+      # Pin the shortbread.yml profile to the same release tag as planetiler.jar
+      # so the profile and the engine that reads it never drift apart.
+      - name: Download Planetiler and the Shortbread profile
+        run: |
+          curl -sSL -o planetiler.jar \
+            "https://github.com/onthegomap/planetiler/releases/download/${{ steps.planetiler.outputs.tag }}/planetiler.jar"
+          curl -sSL -o shortbread.yml \
+            "https://raw.githubusercontent.com/onthegomap/planetiler/${{ steps.planetiler.outputs.tag }}/planetiler-custommap/src/main/resources/samples/shortbread.yml"
+
+      - name: Build PMTiles
+        run: |
+          START=$(date +%s)
+          java -Xmx11g -jar planetiler.jar shortbread.yml \
+            --download --area=united-kingdom \
+            --output=uk.pmtiles \
+            --storage=ram --nodemap-type=sparsearray
+          END=$(date +%s)
+          echo "Build wall-clock: $((END - START))s"
+
+      - name: Verify output size
+        run: |
+          BYTES=$(stat -c%s uk.pmtiles)
+          MIN_BYTES=$((1 * 1000 * 1000 * 1000)) # 1 GB floor — see issue 3.2
+          echo "Output size: $BYTES bytes"
+          if [ "$BYTES" -lt "$MIN_BYTES" ]; then
+            echo "::error::uk.pmtiles is implausibly small ($BYTES bytes, floor is $MIN_BYTES) — likely a truncated or failed source download"
+            exit 1
+          fi
+
+      - name: Report output size
+        run: ls -lh uk.pmtiles

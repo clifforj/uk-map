@@ -1,8 +1,9 @@
 name: Build UK tiles
 
-# Builds and uploads a versioned PMTiles archive. Does NOT make anything
-# live — promotion (writing latest.json) is a separate workflow (issue 3.5),
-# so a bad build never goes live unattended.
+# Builds and uploads a versioned PMTiles archive to R2, writing a .done
+# marker last so nothing downstream acts on a partial upload. Does NOT
+# make anything live — promotion (writing latest.json) is a separate
+# workflow (issue 3.5), so a bad build never goes live unattended.
 
 on:
   schedule:
@@ -15,6 +16,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        run: echo "value=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -45,11 +50,12 @@ jobs:
           java -Xmx11g -jar planetiler.jar shortbread.yml \
             --download --area=united-kingdom \
             --output=uk.pmtiles \
-            --storage=ram --nodemap-type=sparsearray
+            --storage=ram --nodemap-type=sparsearray | tee planetiler-build.log
           END=$(date +%s)
           echo "Build wall-clock: $((END - START))s"
 
       - name: Verify output size
+        id: size
         run: |
           BYTES=$(stat -c%s uk.pmtiles)
           MIN_BYTES=$((1 * 1000 * 1000 * 1000)) # 1 GB floor — see issue 3.2
@@ -58,6 +64,50 @@ jobs:
             echo "::error::uk.pmtiles is implausibly small ($BYTES bytes, floor is $MIN_BYTES) — likely a truncated or failed source download"
             exit 1
           fi
+          echo "bytes=$BYTES" >> "$GITHUB_OUTPUT"
 
       - name: Report output size
         run: ls -lh uk.pmtiles
+
+      # Uploads the staged archive under a versioned filename and only marks
+      # it complete once every upload has succeeded — see issue 3.3. Nothing
+      # downstream (validation, promotion) may act on a version without its
+      # .done marker present.
+      - name: Upload to R2
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          VERSION=${{ steps.version.outputs.value }}
+          PLANETILER_VERSION=${{ steps.planetiler.outputs.tag }}
+          OUTPUT_BYTES=${{ steps.size.outputs.bytes }}
+
+          # Source extract date: parsed from the Geofabrik download URL Planetiler
+          # logged (filename encodes the extract's own date, e.g. united-kingdom-260824.osm.pbf).
+          # Falls back to the build date if the URL isn't found in the log.
+          SOURCE_DATE=$(grep -oE 'download\.geofabrik\.de/europe/united-kingdom-[0-9]{6}\.osm\.pbf' planetiler-build.log \
+            | head -1 | grep -oE '[0-9]{6}' || true)
+          SOURCE_DATE=${SOURCE_DATE:-$VERSION}
+
+          curl -sSL https://rclone.org/install.sh | sudo bash
+
+          rclone copyto uk.pmtiles "r2:${{ secrets.R2_BUCKET }}/uk-${VERSION}.pmtiles" \
+            --header-upload "Cache-Control: public, max-age=31536000, immutable" \
+            --header-upload "Content-Type: application/octet-stream" \
+            --s3-chunk-size 64M --progress
+
+          # .done marker written last, only after the archive upload succeeds above.
+          cat > done.json <<EOF
+          {
+            "version": "${VERSION}",
+            "sha": "${GITHUB_SHA}",
+            "planetiler_version": "${PLANETILER_VERSION}",
+            "source_extract_date": "${SOURCE_DATE}",
+            "output_bytes": ${OUTPUT_BYTES}
+          }
+          EOF
+          rclone copyto done.json "r2:${{ secrets.R2_BUCKET }}/uk-${VERSION}.done" \
+            --header-upload "Content-Type: application/json"

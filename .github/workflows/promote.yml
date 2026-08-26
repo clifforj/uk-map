@@ -1,0 +1,155 @@
+name: Promote a build
+
+# Makes a staged, validated build live by writing latest.json. Deliberately
+# separate from build-tiles.yml (issue 3.2) — see the note there and in
+# plan.md 3.5. A version only goes live when this workflow runs, either by
+# hand or via the Saturday auto-promote below; a bad or unvalidated build
+# never goes live unattended.
+#
+# Rollback is the same operation: dispatch this workflow with an earlier
+# version. The gate below re-validates it before it goes live.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to promote, e.g. 20260826. Empty = most recently staged version.'
+        required: false
+        type: string
+  schedule:
+    # Saturday 02:00 UTC — a lag after the Wednesday build (build-tiles.yml),
+    # giving a bake period before anything goes live unattended. Per
+    # plan.md 3.5, mirrors OpenFreeMap's build-Wednesday/promote-Saturday gap.
+    - cron: '0 2 * * 6'
+
+jobs:
+  # Re-runs the staged-build validation gate (issue 3.4) against the version
+  # being promoted. This is what "refuse to promote a version that failed
+  # the gate" means in practice: the gate must pass right now, on this run,
+  # not merely have passed at build time.
+  validate:
+    uses: ./.github/workflows/validate-tiles.yml
+    with:
+      version: ${{ inputs.version || '' }}
+    secrets: inherit
+
+  promote:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.log.outputs.version }}
+      timestamp: ${{ steps.log.outputs.timestamp }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - name: Resolve version to promote
+        id: resolve
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$R2_ENDPOINT" \
+              | awk '{print $4}' | grep -E '^uk-[0-9]{8}\.done$' \
+              | sed -E 's/uk-([0-9]{8})\.done/\1/' | sort -r | head -1)
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::No staged version found to promote"
+            exit 1
+          fi
+          echo "Promoting version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Belt-and-braces: the validate job above already refuses to run
+      # against a version with no .done marker (see validate-tiles.yml's
+      # "Assert .done marker exists" step), so reaching this point already
+      # proves the marker exists. Checked again here so promote.yml never
+      # depends on validate-tiles.yml's internals to enforce this invariant.
+      - name: Assert .done marker exists
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          if ! aws s3api head-object --bucket "$R2_BUCKET" --key "uk-${VERSION}.done" --endpoint-url "$R2_ENDPOINT" >/dev/null 2>&1; then
+            echo "::error::uk-${VERSION}.done marker not found — refusing to promote"
+            exit 1
+          fi
+
+      - name: Write and upload latest.json
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "url": "https://${{ secrets.TILE_HOSTNAME }}/uk-${VERSION}.pmtiles"
+          }
+          EOF
+          cat latest.json
+
+          curl -sSL https://rclone.org/install.sh | sudo bash
+          RCLONE_CONFIG_R2_TYPE=s3 \
+          RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+          RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+          rclone copyto latest.json "r2:${R2_BUCKET}/latest.json" \
+            --header-upload "Cache-Control: public, max-age=300" \
+            --header-upload "Content-Type: application/json" \
+            --s3-no-check-bucket
+
+      - name: Log promotion
+        id: log
+        run: |
+          VERSION=${{ steps.resolve.outputs.version }}
+          ACTOR="${{ github.actor }}"
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "Promoted uk-${VERSION} to live by ${ACTOR} at ${TIMESTAMP}"
+          {
+            echo "## :rocket: Promoted \`${VERSION}\` to live"
+            echo "By **${ACTOR}** at ${TIMESTAMP}."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
+
+  # Going live should be visible — files a GitHub issue for every successful
+  # promotion. See issue 3.7 and docs/decisions/004-notification-channel.md.
+  notify:
+    needs: [validate, promote]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v7
+        if: needs.promote.result == 'success'
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Promoted uk-${{ needs.promote.outputs.version }} to live`,
+              body: `Promoted by **${{ github.actor }}** at ${{ needs.promote.outputs.timestamp }}.`,
+            });
+
+      - uses: actions/github-script@v7
+        if: needs.promote.result == 'failure' || needs.validate.result == 'failure'
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+            const failed = jobs.data.jobs.filter(j => j.conclusion === 'failure');
+            const details = failed.map(j => {
+              const steps = j.steps.filter(s => s.conclusion === 'failure').map(s => s.name).join(', ');
+              return `- **${j.name}**: ${steps || 'unknown step'}`;
+            }).join('\n') || '(no failed steps found — check the run directly)';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Promotion failed: run #${context.runNumber}`,
+              body: `The \`${context.workflow}\` workflow failed.\n\n${details}\n\nRun: ${runUrl}`,
+            });

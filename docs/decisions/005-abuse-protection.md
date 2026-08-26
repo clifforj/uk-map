@@ -1,6 +1,6 @@
 # 005 — Abuse protection and request caps
 
-**Status:** Decided (rate-limiting rule pending manual dashboard application)
+**Status:** Decided and applied
 **Date:** 2026-08-26
 **Issue:** #19 (plan item 4.3)
 
@@ -41,23 +41,28 @@ bite on the second.
 
 | Field | Value |
 |---|---|
-| Expression | `http.host eq "tiles.example.com"` (i.e. every path on the tile hostname — tiles, `/fonts/`, `/sprites/`, TileJSON) |
+| Expression | URI Path starts with `/` (i.e. every request on the zone — the dashboard's rate-limiting builder didn't expose a Hostname field, but this zone serves nothing but the tile Worker, so it's equivalent — tiles, `/fonts/`, `/sprites/`, TileJSON) |
 | Characteristic | Source IP |
 | Period | 10 seconds |
 | Threshold | 600 requests |
-| Mitigation timeout | 60 seconds |
+| Mitigation timeout | 10 seconds (the dashboard only offered 10s for this plan/period combination — not the 60s originally specced) |
 | Action | Block (not Challenge — MapLibre issues plain `fetch()`/XHR requests, which can't complete a JS/managed challenge, so a challenge action would just look like an outage to a real client) |
 
 600 req/10s (60 req/s) is well above the low-tens/s ceiling a real MapLibre
-session produces, so normal use shouldn't trip it. Once tripped, a single
-IP is capped at roughly 600 requests per 70-second cycle (10s window + 60s
-block) sustained, i.e. ~740k requests/day worst case from one IP — bounded,
-not eliminated, since Free plan rate limiting is IP-only with a single rule
-(no ASN- or fingerprint-based counting, and no protection against a
-distributed set of IPs each staying under the per-IP threshold). That
-residual risk is accepted as the cost of staying on the Free plan; revisit
-(Business plan, 5 rules, IP+NAT/custom expressions) only if distributed
-abuse is actually observed.
+session produces, so normal use shouldn't trip it. With a 10s mitigation
+timeout instead of the originally specced 60s, a persistent single IP can
+sustain roughly 600 requests per 20-second cycle (10s window + 10s block),
+i.e. up to ~2.6M requests/day from one IP before it alone could exhaust the
+Workers Free plan's shared 100k-requests/day account cap in under an hour —
+bounded, not eliminated, since Free plan rate limiting is IP-only with a
+single rule (no ASN- or fingerprint-based counting, and no protection
+against a distributed set of IPs each staying under the per-IP threshold).
+This doesn't change the dollar risk (still $0 — the account-wide cap fails
+closed regardless of which IP burns through it), only how much of a bad
+day one abusive IP could cause before the daily cap kicks in account-wide.
+That residual risk is accepted as the cost of staying on the Free plan;
+revisit (Business plan, 5 rules, IP+NAT/custom expressions, longer
+mitigation windows) only if distributed abuse is actually observed.
 
 **Referer allowlist:** not configured yet. No consuming domain is fixed —
 the demo page's domain isn't decided (issue 5.2 is still open), matching
@@ -115,11 +120,9 @@ no-new-external-service preference ([[004-notification-channel]]).
 
 ## Consequences
 
-- The rate-limiting rule table above needs to be applied by hand in the
-  Cloudflare dashboard (Security → WAF → Rate limiting rules) against
-  `tiles.example.com` — not automated in this change, since this session
-  has no Cloudflare credentials. Issue #19 stays open/in-progress until
-  that's confirmed live.
+- The rate-limiting rule above was applied by hand in the Cloudflare
+  dashboard (Security → WAF → Rate limiting rules) against the tile zone,
+  since this session has no Cloudflare credentials to do it directly.
 - Revisit the Referer allowlist and this rule's scope once issue 5.2 fixes
   the demo page's domain, in lockstep with issue 4.2.
 - If distributed (many-IP) abuse is ever observed, the Free plan's

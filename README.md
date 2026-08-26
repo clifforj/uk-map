@@ -14,6 +14,22 @@ requirement, not just a default. Anything that shouldn't be public (the tile
 hostname, R2 account ID) is kept out of the repo and stored as GitHub Actions
 secrets instead — see below.
 
+## Demo client
+
+`client/` is a minimal MapLibre GL page (issue 5.2). It's deliberately not
+deployed anywhere — run it locally instead:
+
+```sh
+./client/serve.sh <tile-hostname>
+# or: TILE_HOSTNAME=<tile-hostname> ./client/serve.sh
+```
+
+This serves `client/` on `http://localhost:8000` (pass a second argument to
+use a different port) from a throwaway temp copy with `__TILE_HOSTNAME__`
+substituted in, so the real hostname never gets committed. The tile Worker
+allows `localhost` unconditionally regardless of `ALLOWED_ORIGINS`, so this
+works without any Worker-side changes — see issue 5.2's findings.
+
 ## Working on this repo
 
 This project is small enough right now that branches and PRs are unnecessary

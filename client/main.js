@@ -1,5 +1,5 @@
-// TILE_HOSTNAME is substituted at deploy time (see .github/workflows/deploy-demo.yml)
-// from the TILE_HOSTNAME repo secret — see docs/decisions/003-cloudflare-domain.md.
+// TILE_HOSTNAME is substituted for local testing (see client/serve.sh) from a
+// hostname you supply yourself — see docs/decisions/003-cloudflare-domain.md.
 // In this committed source it stays a placeholder so the real hostname is never
 // checked into the (public) repo.
 const TILE_HOSTNAME = "__TILE_HOSTNAME__";

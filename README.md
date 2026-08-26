@@ -46,3 +46,18 @@ workflows.
   rotate: create a new bucket-scoped token in the Cloudflare dashboard,
   update the four `R2_*` GitHub secrets, confirm the smoke test workflow
   still passes, then revoke the old token.
+
+### Layout
+
+- `/fonts/<fontstack>/<unicode-range>.pbf` — glyph PBFs. Currently
+  `noto_sans_regular` and `noto_sans_bold` (from
+  [versatiles-org/versatiles-fonts](https://github.com/versatiles-org/versatiles-fonts)),
+  trimmed to the Latin/Cyrillic/Greek/punctuation ranges this map needs
+  rather than the full multi-script set.
+- `/sprites/<set>/sprites[@2x|@3x|@4x].{png,json}` — sprite sheets from
+  [versatiles-org/versatiles-style](https://github.com/versatiles-org/versatiles-style)
+  (`basics` and `markers` sets). `basics` is what the shortlisted
+  Colorful/Neutrino styles reference by default.
+- Both were uploaded with a one-year immutable cache-control header, via a
+  one-off `workflow_dispatch` run (same pattern as the archive upload in
+  issue 2.3) that was deleted once it completed.

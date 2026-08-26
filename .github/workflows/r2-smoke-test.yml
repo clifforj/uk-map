@@ -15,3 +15,7 @@ jobs:
         run: |
           aws s3 ls "s3://${{ secrets.R2_BUCKET }}" \
             --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          aws s3 ls "s3://${{ secrets.R2_BUCKET }}/fonts/" --recursive \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          aws s3 ls "s3://${{ secrets.R2_BUCKET }}/sprites/" --recursive \
+            --endpoint-url "https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
